@@ -6,27 +6,13 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"sync"
+
+	"github.com/mattetti/filebuffer"
 )
 
 func getRoot(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("got / request\n")
-	io.WriteString(w, "This is my website!\n")
-}
-func getVideo(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("v")
-	cmd := exec.Command("yt-dlp", "https://www.youtube.com/watch?v="+id, "-o", "-", "--merge-output-format", "mp4")
-
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Start()
-
-	scanner := bufio.NewScanner(stdout)
-	scanner.Split(bufio.ScanBytes)
-	for scanner.Scan() {
-		m := scanner.Bytes()
-		w.Write(m)
-	}
-
-	cmd.Wait()
+	io.WriteString(w, "Hello World!\n")
 }
 
 func main() {
@@ -35,3 +21,106 @@ func main() {
 
 	http.ListenAndServe(":3333", nil)
 }
+
+var downloadBuffer sync.Map
+
+type activeTransfer struct {
+	data     *filebuffer.Buffer
+	progress chan bool
+}
+
+func getVideo(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("v")
+	fmt.Println("Processing request for " + id)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment;filename="%s.mp4"`, id))
+
+	entry, existing := downloadBuffer.LoadOrStore(id, &activeTransfer{
+		data:     filebuffer.New(nil),
+		progress: make(chan bool),
+	})
+	defer downloadBuffer.Delete(id)
+	videoBuffer := entry.(*activeTransfer)
+	defer videoBuffer.data.Close()
+
+	if existing { // read from buffer
+		fmt.Println("- Using existing buffer")
+		scanner := bufio.NewScanner(videoBuffer.data)
+		scanner.Split(bufio.ScanBytes)
+
+		for <-videoBuffer.progress {
+			for scanner.Scan() {
+				m := scanner.Bytes()
+				fmt.Println("- Reading new data...")
+				w.Write(m) // Write to client
+			}
+		}
+		fmt.Println("- Done using buffer")
+		return
+	}
+
+	// Attempt to load from file cache
+	// fmt.Println("- Checking file cache...")
+	// reader := getVideoFileReader(id)
+	// if reader != nil {
+	// 	scanner := bufio.NewScanner(reader)
+	// 	scanner.Split(bufio.ScanBytes)
+	// 	for scanner.Scan() {
+	// 		m := scanner.Bytes()
+	// 		w.Write(m)                // Write to first client
+	// 		videoBuffer.data.Write(m) // Write to buffer
+	// 		select {                  // Notify of progress
+	// 		case videoBuffer.progress <- true:
+	// 		default:
+	// 		}
+	// 	}
+	// 	fmt.Println("- Done using cached file")
+	// 	return
+	// } else {
+	// 	fmt.Println("- No cached file")
+	// }
+
+	// No file, load into cache
+	fmt.Println("Starting yt-dlp")
+	cmd := exec.Command("yt-dlp", "https://www.youtube.com/watch?v="+id, "-o", "-", "--merge-output-format", "mp4")
+
+	stdout, _ := cmd.StdoutPipe()
+	cmd.Start()
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Split(bufio.ScanBytes)
+
+	// File writer
+	// fmt.Println("- Opening for writing")
+	// file, _ := os.Create("/tmp/" + id + ".mp4")
+	for scanner.Scan() {
+		m := scanner.Bytes()
+		w.Write(m)                // Write to first client
+		videoBuffer.data.Write(m) // Write to buffer
+		select {                  // Notify of progress
+		case videoBuffer.progress <- true:
+		default:
+		}
+		// if file != nil {
+		// 	file.Write(m) // Write to file
+		// }
+	}
+
+	if err := cmd.Wait(); err != nil {
+		fmt.Println("Error running yt-dlp:", err)
+	}
+
+	// Idk why I can't defer this above instead
+	close(videoBuffer.progress)
+	// file.Close()
+}
+
+// // Returns reader for video file by ID or nil
+// func getVideoFileReader(id string) io.Reader {
+// 	file, err := os.Open("/tmp/" + id + ".mp4")
+// 	if err != nil {
+// 		fmt.Println("Error opening file:", err)
+// 		return nil
+// 	}
+// 	fmt.Println("Reading /tmp/" + id + ".mp4")
+// 	return file
+// }
