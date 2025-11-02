@@ -14,6 +14,7 @@ func getRoot(w http.ResponseWriter, r *http.Request) {
 }
 func getVideo(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("v")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment;filename="%s.mp4"`, id))
 	cmd := exec.Command("yt-dlp", "https://www.youtube.com/watch?v="+id, "-o", "-", "--merge-output-format", "mp4")
 
 	stdout, _ := cmd.StdoutPipe()
