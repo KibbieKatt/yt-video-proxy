@@ -38,9 +38,9 @@ func getVideo(w http.ResponseWriter, r *http.Request) {
 
 	// Check for active download buffer entry
 	entry, existing := downloadBuffer.Load(id)
-	videoBuffer := entry.(*activeTransfer)
 
 	if existing { // read from buffer
+		videoBuffer := entry.(*activeTransfer)
 		fmt.Println("- Using existing buffer")
 		scanner := bufio.NewScanner(videoBuffer.data)
 		scanner.Split(bufio.ScanBytes)
@@ -77,7 +77,7 @@ func getVideo(w http.ResponseWriter, r *http.Request) {
 		data:     filebuffer.New(nil),
 		progress: make(chan bool),
 	})
-	videoBuffer = entry.(*activeTransfer)
+	videoBuffer := entry.(*activeTransfer)
 
 	// We must check existing again since another request may have raced us
 	if existing {
@@ -97,7 +97,7 @@ func getVideo(w http.ResponseWriter, r *http.Request) {
 	} else {
 		defer downloadBuffer.Delete(id)
 		defer videoBuffer.data.Close()
-		close(videoBuffer.progress)
+		defer close(videoBuffer.progress)
 
 		fmt.Println("Starting yt-dlp")
 		cmd := exec.Command("yt-dlp", "https://www.youtube.com/watch?v="+id, "-o", "-", "--merge-output-format", "mp4")
